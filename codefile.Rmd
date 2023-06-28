@@ -1,0 +1,328 @@
+---
+title: "Bone Marrow"
+author: "Snehadrita Das"
+date: "2023-05-14"
+output: pdf_document
+---
+
+## Data Loading, Preprocessing and Splitting  
+
+```{r,warning=FALSE}
+bm=read.csv("C:/Users/hp/Desktop/data proj/BoneMarrow.csv")
+head(bm,3)
+```
+
+## Library Dependency  
+
+```{r}
+library("survival")
+library("penalized")
+library("survminer")
+library("randomForestSRC")
+library("corrplot")
+library("ggplot2")
+```
+
+## Exploratory Data Analysis    
+
+A separate dataset Catdata containing all the predictor variables has been created for the ease of EDA while suspecting Multicollinearity.  
+
+### Converting into Factors for catdata  
+
+```{r}
+predictors <- read.csv("C:/Users/hp/Desktop/predictors.csv")
+catdata<- predictors[,1:21]
+catdata$Recipientgender=as.factor(catdata$Recipientgender)
+catdata$Stemcellsource=as.factor(catdata$Stemcellsource)
+## like this for the rest of the variables
+```
+
+
+### Checking Difference of Deviances   
+
+* Checking the difference of null and residual deviance as a metric for how much the variability is being explained and too small value of such difference is problematic as well as too large value since the bigger difference indicated less than p-variables are explaining the variability or none of them are significant in explaining the variability.  
+* The difference less than 0.1 and equal to or greater than 0.3 has been considered problematic  
+
+```{r}
+catfit1<- glm(Recipientgender~.,data=catdata,family = "binomial")
+catfit2<- glm(Stemcellsource~.,data=catdata,family = "binomial")
+## lie this for the rest of the variables
+```
+
+
+### Converting into Factors for the main dataset    
+
+```{r}
+bm$Recipientgender=as.factor(bm$Recipientgender)
+bm$Stemcellsource=as.factor(bm$Stemcellsource)
+## lie this for the rest of the variables
+
+str(bm)
+```
+
+### Splitting into Train and Test data for ML works  
+
+```{r}
+set.seed(11)
+train<- sample(1:177,142,replace = FALSE)
+bmtrain=bm[train,]
+bmtest=bm[-train,]
+```
+
+## Exploratory Data Analysis for the continuous variables    
+
+```{r}
+## Matrix Correlation Plot
+cornum <- bm[,c(3,21,25:31)]
+corrplot(cor(cornum),method="square",type="lower",tl.col = 1,tl.srt=45,bg="gray",tl.cex=0.6,number.cex=0.8,number.font = 3)
+```
+
+
+## Fitting CoxPH model  
+
+```{r}
+## Model excluding multicollinear variables
+coxfit1<-coxph(Surv(survival_time,survival_status)~Recipientgender+
+               Stemcellsource+Donorage + DonorABO +RecipientABO+Donorage35+
+               RecipientRh + ABOmatch + Disease +Diseasegroup +DonorCMV+
+               Recipientage +Recipientage10 + Relapse+ CD34kgx10d6 + 
+               CD3dCD34+CD3dkgx10d8+Rbodymass+ANCrecovery+PLTrecovery+
+               time_to_aGvHD_III_IV,data=bmtrain)
+## !!!! Warning: Ran out of iterations and did not converge !!!!
+
+```
+
+## Diagnostic of CoxPH  
+
+### Reasons for CoxPH model to run out of iterations and do not converge  
+
+1. Separation: When there are one or more predictor variables that perfectly predict the outcome variable, also known as complete separation, the maximum likelihood estimation may not exist, and the optimization algorithm may fail to converge.  
+
+2. Small sample size. 3. Highly correlated variables. 4. Non-proportional hazards.  
+
+* (1).Survival curves for different strata must have hazard functions that are proportional over the time t  
+* (2).The relationship between the log hazard and each covariate is linear, which can be verified with residual plots.   
+
+#### Checking the proportional hazard assumption   
+
+```{r}
+## checking the proportional hazard assumption  
+
+schoenfeld.res = residuals(coxfit1,type="schoenfeld")
+head(schoenfeld.res)
+
+plot(schoenfeld.res[,16]~survival_time[which(survival_status==1)],data=bmtrain,
+     xlab="Time",ylab="Res CD34kgx10d6",main="schoenfeld residual for CD34kgx10d6") ; abline(h=0,col="red")
+
+
+plot(schoenfeld.res[,17]~survival_time[which(survival_status==1)],data=bmtrain,
+     xlab="Time",ylab="Res CD3dCD34",main="schoenfeld residual for CD3dCD34") ; abline(h=0,col="red")
+
+
+## lie this for the rest of the variables
+```
+
+## Fitting CoxPH model again, fixing the time dependency  
+
+
+```{r}
+
+## Model while dealing with the Non-proportionality of hazards 
+coxfit2<-coxph(Surv(survival_time,survival_status)~Recipientgender+
+              Stemcellsource + tt(Donorage) + DonorABO + RecipientABO+Donorage35+
+               RecipientRh + ABOmatch + Disease + Diseasegroup + DonorCMV+
+              tt(Recipientage) + Recipientage10 + Relapse+ tt(CD34kgx10d6) + 
+              tt(CD3dCD34)+tt(CD3dkgx10d8)+tt(Rbodymass)+tt(ANCrecovery)+
+              tt(PLTrecovery)+tt(time_to_aGvHD_III_IV),data=bmtrain)
+
+
+## Model with the interaction term and excluding one of the correlated variables
+coxfit4<-coxph(Surv(survival_time,survival_status)~Recipientgender+
+              Stemcellsource+tt(Donorage) + DonorABO + RecipientABO+
+               RecipientRh + ABOmatch + Disease +DonorCMV+Donorage35+
+               Diseasegroup +Recipientage10 +Relapse+ tt(CD34kgx10d6) + 
+                tt(CD3dCD34)+tt(CD3dkgx10d8)+tt(Rbodymass)+tt(ANCrecovery)+
+              tt(PLTrecovery)+tt(time_to_aGvHD_III_IV)+
+                tt(Recipientage):tt(Rbodymass) ,data=bmtrain)
+
+## Model with no interaction term and one of the variables excluded
+coxfit5<-coxph(Surv(survival_time,survival_status)~Recipientgender+
+              Stemcellsource+tt(Donorage) + DonorABO + RecipientABO+
+               RecipientRh + ABOmatch + Disease +DonorCMV+Donorage35+
+               Diseasegroup +Recipientage10 +Relapse+ tt(CD34kgx10d6) + 
+                tt(CD3dCD34)+tt(CD3dkgx10d8)+tt(Rbodymass)+tt(ANCrecovery)+
+              tt(PLTrecovery)+tt(time_to_aGvHD_III_IV) ,data=bmtrain)
+
+summary(coxfit1) ; AIC(coxfit1)  
+summary(coxfit2) ; AIC(coxfit2)  
+summary(coxfit4) ; AIC(coxfit4) 
+summary(coxfit5) ; AIC(coxfit5) 
+
+```
+
+## Variable Selection and Step Regression  
+
+```{r}
+
+## After Step Reg
+
+## The Optimised model
+stepcox2<-coxph(formula = Surv(survival_time, survival_status) ~ Stemcellsource + 
+    tt(Donorage) + DonorABO + RecipientRh + DonorCMV + Relapse + 
+    tt(CD3dkgx10d8) + tt(ANCrecovery) + tt(PLTrecovery) + tt(time_to_aGvHD_III_IV), 
+    data = bmtrain)
+
+summary(stepcox2) ; AIC(stepcox2)
+```
+
+
+## Residual Plot  
+
+```{r}
+## Full model 
+
+pfit1<- coxph(Surv(survival_time,survival_status)~Recipientgender+
+            Stemcellsource+ Donorage + Donorage35 + IIIV + 
+            Gendermatch + DonorABO + RecipientABO+RecipientRh + 
+            ABOmatch + DonorCMV + Disease + Riskgroup + Txpostrelapse +
+           Diseasegroup + HLAmatch+ HLAmismatch + Antigen + Alel + HLAgrI +
+           Recipientage +Recipientage10 + Relapse+ aGvHDIIIIV+ 
+          CD34kgx10d6 + CD3dCD34 + CD3dkgx10d8 + Rbodymass + 
+         ANCrecovery + PLTrecovery + time_to_aGvHD_III_IV,data=bmtrain)
+
+## The Optimised model
+pfit5<-coxph(Surv(survival_time,survival_status)~Stemcellsource+
+            Donorage +RecipientRh +Disease + Relapse+ANCrecovery+
+            PLTrecovery+time_to_aGvHD_III_IV,data=bmtrain)
+
+res1 <- residuals(pfit1,type="martingale") ; plot(res1)
+res5 <- residuals(pfit5,type="martingale") ; plot(res5)
+
+```
+
+* ***Also the points on the plots show patterns.***   
+
+## The Penalisation  
+
+
+```{r}
+
+penfit3 <- penalized(Surv(survival_time,survival_status)~.,data=bmtrain,lambda1 = 3)
+coefficients(penfit3)   ## pentalty = 5.883067
+
+```
+
+
+## Visualisation of Shrinkage of coefficients  
+
+```{r}
+bmpen2=penalized(Surv(survival_time,survival_status)~., standardize = TRUE,            steps="Park",data=bmtrain,lambda1=5)
+plotpath(bmpen2,labelsize =0.8,lwd=2,cex=2)
+```
+
+
+## Recreating some of the graphs  
+
+```{r}
+#### Schoenfeld Residuals
+
+ggdata <- data.frame(index = 1:142,
+                     Residuals = pen.martingale)
+
+g.pen <- ggplot(data=ggdata,aes(x=index,y=Residuals))+
+  geom_point()+geom_hline(yintercept = 0) + 
+  ggtitle("Martingale Residual For Cox-Lasso Model") +
+  xlab("Index")+ylab("Martingale Residual")+
+  theme(aspect.ratio=0.8) ; g.pen
+
+### Martingale residual plot  
+
+ggcoxdiagnostics(pfit5,type = "martingale",linear.predictions=F,
+                 ggtheme = ggplot2::theme_gray(),title = "Diagnostic Plot")
+
+
+### Plots related Penalization
+
+g4 <- ggplot(data=pendata,aes(x=Lambda,y=LogLik))+
+  geom_point()+geom_line() + ylim(-350,-300) +
+  ggtitle("Tuning Parameter vs Loss Function") +
+  xlab("Value of Tuning Parameter Lambda")+ylab("Value of the Loss function")+
+  theme(aspect.ratio=0.8) ; g4
+
+g5 <- ggplot(data=pendata,aes(x=NonZeroVar,y=LogLik))+
+  geom_point()+geom_line() + ylim(-350,-300) +
+  ggtitle("Non Zero Var vs Loss Function") +
+  xlab("Number of Non Zero Variables")+ylab("Value of the Loss function")+
+  theme(aspect.ratio=0.8) ; g5
+
+
+grid.arrange(g4,g5, ncol=2, nrow =1)
+
+```
+
+## Random Survival Forest  
+
+
+### Model 1 : Passing all the variables  
+
+```{r,message=FALSE,warning=FALSE}
+
+## Tuning the nodesize
+set.seed(132)
+tune.nodesize(Surv(survival_time,survival_status) ~ ., data=bmtrain[,-12])
+
+## Comparing the Splitting rules 
+set.seed((132))
+split1 <-  rfsrc(Surv(survival_time,survival_status)~.,
+               mtry=10,importance = "permute", nodesize = 9 , 
+               splitrule = "logrankscore", 
+               bootstrap = "by.root",ntree=5000,data=bmtrain[,-12])
+set.seed((132))
+split2<- rfsrc(Surv(survival_time,survival_status)~.,
+               mtry=10,importance = "permute", nodesize = 9 , 
+               splitrule = "logrank", 
+               bootstrap = "by.root",ntree=5000,data=bmtrain[,-12])
+set.seed((132))
+split3<- rfsrc(Surv(survival_time,survival_status)~.,
+               mtry=10,importance = "permute", nodesize = 9 , 
+               splitrule = "bs.gradient", 
+               bootstrap = "by.root",ntree=5000,data=bmtrain[,-12])
+
+
+## passing only the variables chosen by LASSO
+
+formula <- Surv(survival_time,survival_status)~IIIV + Donorage + DonorABO +
+  RecipientRh +Diseasegroup + Riskgroup +
+  Recipientage10 + Relapse+ CD34kgx10d6 + 
+  CD3dCD34+CD3dkgx10d8+Rbodymass+ANCrecovery+PLTrecovery+
+  time_to_aGvHD_III_IV
+
+set.seed((132))
+model.pen <- rfsrc(formula = formula,
+                   mtry=5,importance = "permute", nodesize = 9 , 
+                   splitrule = "logrank", 
+                   bootstrap = "by.root",ntree=5000,data=bmtrain)
+
+print(model.pen)
+plot(get.tree(model.pen, 3))
+plot(model.pen)
+```
+
+## Comprehension Table  
+
+```{r}
+Model = c("logrank Score", "logrank", "bs gradient", "All Var","Var selected by LASSO")
+Error.Rate= c(0.4052, 0.3317,0.3325,0.3317, 0.32069)
+cm.table <- data.frame(Model,Error.Rate, ntree= rep(5000,5))
+cm.table
+```
+
+
+
+
+
+
+
+
+
+
